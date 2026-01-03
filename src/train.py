@@ -1,6 +1,7 @@
 import os
 import logging
 from pathlib import Path
+from datetime import datetime
 import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
@@ -9,13 +10,24 @@ from sklearn.metrics import f1_score, accuracy_score
 import numpy as np
 
 # ----------------------------
+# Directory Setup
+# ----------------------------
+LOGS_DIR = Path("logs")
+MODELS_DIR = Path("models")
+LOGS_DIR.mkdir(exist_ok=True)
+MODELS_DIR.mkdir(exist_ok=True)
+
+# ----------------------------
 # Logging Configuration
 # ----------------------------
+timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+log_file = LOGS_DIR / f"training_{timestamp}.log"
+
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s',
     handlers=[
-        logging.FileHandler('training.log'),
+        logging.FileHandler(log_file),
         logging.StreamHandler()
     ]
 )
@@ -29,13 +41,21 @@ BATCH_SIZE = 32
 NUM_EPOCHS = 20
 LEARNING_RATE = 1e-3
 NUM_CLASSES = 6  # NEU dataset
-MODEL_SAVE_PATH = "best_model.pth"
-DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+MODEL_SAVE_PATH = MODELS_DIR / "best_model.pth"
+
+# Device selection with priority: MPS (Mac M1/M2) > CUDA > CPU
+if torch.cuda.is_available():
+    DEVICE = torch.device("cuda")
+elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+    DEVICE = torch.device("mps")
+else:
+    DEVICE = torch.device("cpu")
 
 logger.info("=" * 60)
 logger.info("TRAINING CONFIGURATION")
 logger.info("=" * 60)
 logger.info(f"Device: {DEVICE}")
+logger.info(f"Log file: {log_file}")
 logger.info(f"Data directory: {DATA_DIR}")
 logger.info(f"Batch size: {BATCH_SIZE}")
 logger.info(f"Number of epochs: {NUM_EPOCHS}")
@@ -100,9 +120,17 @@ logger.info(f"Trainable parameters: {sum(p.numel() for p in model.parameters() i
 # ----------------------------
 criterion = nn.CrossEntropyLoss()
 optimizer = torch.optim.Adam(model.parameters(), lr=LEARNING_RATE)
+scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+    optimizer,
+    mode='max',  # maximize F1-score
+    factor=0.5,
+    patience=2,
+    min_lr=1e-6
+)
 
 logger.info(f"Loss function: CrossEntropyLoss")
 logger.info(f"Optimizer: Adam (lr={LEARNING_RATE})")
+logger.info(f"Learning Rate Scheduler: ReduceLROnPlateau (factor=0.5, patience=2)")
 logger.info("=" * 60)
 logger.info("STARTING TRAINING")
 logger.info("=" * 60)
@@ -163,18 +191,25 @@ for epoch in range(NUM_EPOCHS):
     val_acc = accuracy_score(val_labels, val_preds)
 
     logger.info(f"  [Validation] Loss: {val_loss:.4f} | F1-Score: {val_f1:.4f} | Accuracy: {val_acc:.4f}")
+    
+    # Update learning rate based on validation F1-score
+    current_lr = optimizer.param_groups[0]['lr']
+    scheduler.step(val_f1)
+    new_lr = optimizer.param_groups[0]['lr']
+    if new_lr != current_lr:
+        logger.info(f"  [LR Scheduler] Learning rate reduced: {current_lr:.2e} → {new_lr:.2e}")
 
     # Save best model and handle early stopping
     if val_f1 > best_val_f1:
         best_val_f1 = val_f1
         torch.save(model.state_dict(), MODEL_SAVE_PATH)
-        print("=> Best model saved")
+        logger.info(f"  *** NEW BEST MODEL SAVED *** (Val F1: {val_f1:.4f})")
         counter = 0  # reset counter
     else:
         counter += 1
-        print(f"No improvement for {counter}/{patience} epochs")
+        logger.info(f"  No improvement for {counter}/{patience} epochs")
         if counter >= patience:
-            print(f"Early stopping triggered after {epoch+1} epochs")
+            logger.info(f"  Early stopping triggered after {epoch+1} epochs")
             break  # exit training loop
 
 # ----------------------------
@@ -199,7 +234,7 @@ with torch.no_grad():
 test_f1 = f1_score(test_labels, test_preds, average='macro')
 test_acc = accuracy_score(test_labels, test_preds)
 
-logger.info("\n" + "=" * 60)
+logger.info("=" * 60)
 logger.info("TEST RESULTS")
 logger.info("=" * 60)
 logger.info(f"Test F1-Score: {test_f1:.4f}")
