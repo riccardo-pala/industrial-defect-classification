@@ -1,6 +1,10 @@
-# PyTorch
+# PyTorch with Metal support for Mac M1/M2
 torch==2.9.1
 torchvision==0.24.1
+torchaudio==2.9.1
+
+# SSL Certificates for macOS
+certifi>=2024.0.0
 
 # Core libraries
 numpy>=1.23
