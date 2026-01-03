@@ -205,3 +205,9 @@ cython_debug/
 marimo/_static/
 marimo/_lsp/
 __marimo__/
+# Training outputs
+models/
+logs/
+best_model.pth
+*.pth
+*.pt
